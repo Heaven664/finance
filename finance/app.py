@@ -49,14 +49,11 @@ def index():
     """Show portfolio of stocks"""
 
     # Symbols and numbers of shares from database
-    shares = db.execute("SELECT symbol, number FROM shares")
+    shares = db.execute(
+        "SELECT symbol, number FROM shares JOIN users ON users.username = shares.owner WHERE users.id = ?", session["user_id"])
 
     # User's balance
-    cash = db.execute("SELECT cash FROM users WHERE id = ?",
-                      session["user_id"])[0].get('cash')
-
-    # Formatting user's balance to show only 2 decimal digits
-    cash_format = "{:.2f}".format(cash)
+    cash = db.execute("SELECT cash FROM users WHERE id = ?", session["user_id"])[0].get('cash')
 
     # User's balance with active shares
     big_total = cash
@@ -68,10 +65,10 @@ def index():
         info = lookup(share["symbol"])
 
         # Multiplying number of a share on its price
-        total = float(info["price"] * share["number"])
+        total = info["price"] * share["number"]
 
         # Formatting share's total to show only 2 decimal digits
-        format_total = "{:.2f}".format(total)
+        format_total = total
 
         # Adds total of every share to users balance
         big_total += total
@@ -82,11 +79,8 @@ def index():
         # Concatenates two dictionaries
         share.update(info)
 
-    # Formatting user's total balance to show only 2 decimal digits
-    total_format = "{:.2f}".format(big_total)
-
     # Renders a homepage template
-    return render_template("index.html", shares=shares, total=total_format, cash=cash_format)
+    return render_template("index.html", shares=shares, total=big_total, cash=cash)
 
 
 @app.route("/buy", methods=["GET", "POST"])
@@ -95,8 +89,16 @@ def buy():
     # User reached the route via POST (as by submitting a form via POST)
     if request.method == "POST":
 
+        # Symbol is not provided
+        if not request.form.get("symbol"):
+            return apology("You forgot symbol")
+
+        # Symbol is not provided
+        if not request.form.get("shares").isdigit():
+            return apology("You forgot shares")
+
         # Gets symbol from users input
-        symbol = request.form.get("symbol")
+        symbol = request.form.get("symbol").upper()
 
         # Gets number from users input
         number = int(request.form.get("shares"))
@@ -104,15 +106,15 @@ def buy():
         # Checks the share
         share_info = lookup(symbol)
 
-        # Formatted price
-        format_price = "{:.2f}".format(share_info.get("price"))
+        # Checks if inputted symbol exists
+        if not share_info:
+            return apology("You forgot shares")
 
-        # Symbol is not provided
-        if not symbol:
-            return apology("You forgot symbol")
+        # Formatted price
+        format_price = share_info.get("price")
 
         # Number of shares less then 1
-        elif number <= 0:
+        if number <= 0:
             return apology("You can not buy less then 1 share")
 
         # Symbol doesn't exists
@@ -166,7 +168,7 @@ def buy():
             share_amount = db.execute("SELECT number FROM shares WHERE symbol = ?", symbol)
 
             # Adds old number to number of shares user have bought
-            new_amount =share_amount[0]["number"] + number
+            new_amount = share_amount[0]["number"] + number
 
             # Updates portfolio
             db.execute("UPDATE shares SET number = ? WHERE symbol = ?", new_amount, symbol)
@@ -183,8 +185,8 @@ def buy():
 @login_required
 def history():
     """Show history of transactions"""
-    history = db.execute("SELECT * FROM history JOIN users ON users.username = history.user WHERE users.id = ?",
-                         session["user_id"])
+    history = db.execute(
+        "SELECT * FROM history JOIN users ON users.username = history.user WHERE users.id = ? ORDER BY date DESC", session["user_id"])
 
     return render_template("history.html", history=history)
 
@@ -236,7 +238,7 @@ def logout():
     return redirect("/")
 
 
-@app.route("/quote", methods=["GET"  , "POST"])
+@app.route("/quote", methods=["GET", "POST"])
 @login_required
 def quote():
     """Get stock quote."""
@@ -261,11 +263,10 @@ def quote():
         return render_template("quote.html")
 
 
-
 @app.route("/register", methods=["GET", "POST"])
 def register():
     """Register user"""
-     # User reached route via POST (as by submitting a form via POST)
+    # User reached route via POST (as by submitting a form via POST)
     if request.method == "POST":
 
         # Username from input
@@ -282,23 +283,23 @@ def register():
 
         # If username is not provided
         if not username:
-            return apology("Please input your username", 403)
+            return apology("Please input your username", 400)
 
         # If username exists in database
         elif len(users) != 0:
-            return apology("This username already exists", 403)
+            return apology("This username already exists", 400)
 
         # If password is not provided
         elif not password:
-            return apology("Please input your password", 403)
+            return apology("Please input your password", 400)
 
         # If confirmation password is not provided
         elif not confirmation:
-            return apology("Please confirm your password", 403)
+            return apology("Please confirm your password", 400)
 
         # If confirmation password doesn't match
         elif password != confirmation:
-            return apology("You confirmed your password incorrectly", 403)
+            return apology("You confirmed your password incorrectly", 400)
 
         # Hashes user's password
         hashed_password = generate_password_hash(password)
@@ -322,79 +323,73 @@ def sell():
     # User reached route via POST (as by submitting a form of via redirect)
     if request.method == "POST":
 
+        # Symbol is not provided
+        if not request.form.get("symbol"):
+            return apology("Forgot to choose a share", 403)
+
+        # Amount is not provided
+        if not request.form.get("shares").isdigit():
+            return apology("Please input number of shares")
+
         # Info about seller from database
         user_info = db.execute("SELECT * FROM users WHERE id = ?", session["user_id"])
 
         # Symbol of the share to be sold
-        symbol = request.form.get("symbol")
+        symbol = request.form.get("symbol").upper()
 
         # Amount of the shares to be sold
-        amount = request.form.get("shares")
-
-        # Transaction name
-        action = 'sold'
-
-        # Symbol is not provided
-        if not symbol:
-            return apology("Forgot to choose a share", 403)
-
-        # Amount is not provided
-        elif not amount:
-            return apology("Please input number of shares", 403)
-
-        # Makes an integer for further calculations
-        else:
-            amount = int(amount)
-
-        # Actual amount of a share from user's portfolio
-        actual_amount = db.execute("SELECT number FROM shares WHERE symbol = ?", symbol.lower())
-
-        # User's balance before the transaction
-        old_balance = db.execute("SELECT cash FROM users WHERE id = ?", session["user_id"])[0].get('cash')
-
-        # Returns a dictionary with price, name and symbol of the share
-        share_info = lookup(symbol)
-
-        # Current price of the share
-        share_price = share_info.get("price")
-
-        # Formatted current price
-        format_price = "{:.2f}".format(share_price)
-        # Amount to be deposited in sellers balance
-        price_total = share_price * amount
-
-        # Current datetime in format DD-MM-YYYY HH:MM:SS
-        date = now.strftime("%d/%m/%Y %H:%M:%S")
-
-        # Seller's balance after transaction
-        new_balance = old_balance + price_total
-
-        # Number of the share left in user's portfolio after transaction
-        new_number = db.execute("SELECT number FROM shares JOIN users ON users.username = shares.owner WHERE users.id = ? AND symbol= ? ",
-                       session["user_id"], symbol.lower())[0].get('number') - amount
+        amount = int(request.form.get("shares"))
 
         # If user inputted number of shares less than 1
         if amount < 1:
             return apology("Number of shares must be at least 1", 403)
 
+        # Transaction name
+        action = 'sold'
+
+        # Returns a dictionary with price, name and symbol of the share
+        share_info = lookup(symbol)
+
+        # If symbol is not valid
+        if not share_info:
+            return apology("Symbol doesn't exist")
+
+        # Actual amount of a share from user's portfolio
+        actual_amount = db.execute("SELECT number FROM shares WHERE symbol = ?", symbol)
+
         # If user doesn't have this share
-        elif not actual_amount:
-            return apology("You do not have this share", 403)
+        if not actual_amount:
+            return apology("You do not have this share")
 
         # If user's number of the share is less than amount of shares that he wants to sell
         elif actual_amount[0].get('number') < amount:
-            return apology("Not enough shares", 403)
+            return apology("Not enough shares")
+
+        # Current price of the share
+        share_price = share_info["price"]
+
+        # Amount to be deposited in sellers balance
+        price_total = share_info["price"] * amount
+
+        # Current datetime in format DD-MM-YYYY HH:MM:SS
+        date = now.strftime("%d/%m/%Y %H:%M:%S")
+
+        # Seller's balance after transaction
+        new_balance = user_info[0]["cash"] + price_total
+
+        # Number of the share left in user's portfolio after transaction
+        new_number = db.execute("SELECT number FROM shares JOIN users ON users.username = shares.owner WHERE users.id = ? AND symbol= ? ",
+                                session["user_id"], symbol)[0].get('number') - amount
 
         # Updates balance after transaction
         db.execute("UPDATE users SET cash = ? WHERE id = ?", new_balance, session["user_id"])
 
         # Updates portfolio after transaction
-        db.execute("UPDATE shares SET number = ? WHERE owner = ? AND symbol = ?",
-                    new_number,  user_info[0].get('username'), symbol.lower())
+        db.execute("UPDATE shares SET number = ? WHERE owner = ? AND symbol = ?", new_number,  user_info[0].get('username'), symbol)
 
         # Updates history after transaction
-        db.execute("INSERT INTO history (user, number, symbol, date, action, price) VALUES(?, ?, ?, ?, ?, ?)",
-                    user_info[0].get('username'), amount, symbol, date, action, format_price)
+        db.execute("INSERT INTO history (user, number, symbol, action, date, price) VALUES(?, ?, ?, ?, ?, ?)",
+                   user_info[0].get('username'), amount, symbol, action, date, share_price)
 
         # Removes all shares from portfolio which number is zero
         db.execute("DELETE FROM shares WHERE number IS 0")
@@ -406,8 +401,8 @@ def sell():
     else:
 
         # Gets symbols of shares in user's portfolio
-        portfolio_info = db.execute("SELECT symbol FROM shares JOIN users ON users.username = shares.owner WHERE users.id = ? ",
-                                     session["user_id"])
+        portfolio_info = db.execute(
+            "SELECT symbol FROM shares JOIN users ON users.username = shares.owner WHERE users.id = ? ", session["user_id"])
 
         # Renders a template with selling options
         return render_template("sell.html", portfolio=portfolio_info)
